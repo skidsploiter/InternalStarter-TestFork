@@ -30,7 +30,6 @@ void mainthread() {
 
 BOOL APIENTRY DllMain(HMODULE h, DWORD ul, LPVOID lp) {
 
-	
 	std::thread(mainthread).detach();
 	while (true);
 	return TRUE;
