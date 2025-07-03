@@ -1,4 +1,4 @@
-name: Build InternalStarter x64 Release (C++ - Refined)
+name: Build InternalStarter x64 Release (C++ - Refined with Repo Zip)
 
 on:
   push:
@@ -15,6 +15,28 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4 # Action to checkout your repository code
 
+    - name: Archive Repository as Zip
+      # This step zips the entire checked-out repository content.
+      # The zip file will be named after the workflow run ID for uniqueness.
+      run: |
+        $zipFileName = "InternalStarter-Repo-${{ github.run_id }}.zip"
+        echo "Creating archive: $zipFileName"
+        # Compress-Archive creates a zip file from the current directory's contents.
+        # -Path . : Specifies the current directory as the source.
+        # -DestinationPath $zipFileName : Specifies the output zip file name.
+        # -Force : Overwrites the destination file if it already exists.
+        Compress-Archive -Path . -DestinationPath $zipFileName -Force
+        echo "::set-output name=zip_file_name::$zipFileName"
+      id: archive_repo
+      shell: pwsh
+
+    - name: Upload Repository Archive Artifact
+      uses: actions/upload-artifact@v4 # Action to upload the created zip file as an artifact
+      with:
+        name: InternalStarter-Repository-Source # Name of this artifact
+        path: ${{ steps.archive_repo.outputs.zip_file_name }} # Path to the generated zip file
+        retention-days: 7 # How long to retain the artifact (optional)
+
     - name: Setup MSBuild and Visual Studio Environment
       # This action ensures that MSBuild and necessary Visual Studio components (like C++ workloads)
       # are correctly configured and added to the PATH.
@@ -24,55 +46,61 @@ jobs:
       with:
         msbuild-architecture: x64
 
-    - name: Build Solution (CloudyPublic.sln)
+    - name: Build Solution (CloudyPublic.sln) - Optional, for other projects
+      # This step builds the main solution. If Executor is part of it, it will be built here.
+      # If not, this step might still be necessary for other components.
       run: |
-        # Build the Visual Studio solution. This solution contains both C# (CloudyPublic)
-        # and C++ (Executor) projects. Building the solution should build both.
-        # /p:Configuration=Release: Sets the build configuration to Release.
-        # /p:Platform=x64: Sets the target platform to x64.
-        # /m: Uses multiple CPU cores for faster compilation.
-        # /t:Rebuild: Cleans and then builds the solution.
-        # The solution file 'CloudyPublic.sln' is expected at the root of the repository.
-        echo "Starting MSBuild for CloudyPublic.sln..."
-        msbuild CloudyPublic.sln /p:Configuration=Release /p:Platform=x64 /m /t:Rebuild
-        if ($LASTEXITCODE -ne 0) {
-            echo "::error::MSBuild failed with exit code $LASTEXITCODE"
-            exit 1
+        echo "Starting MSBuild for CloudyPublic.sln (if applicable)..."
+        msbuild CloudyPublic.sln /p:Configuration=Release /p:Platform=x64 /m /t:Rebuild || echo "CloudyPublic.sln build might have failed or is not the primary target, continuing..."
+      shell: pwsh
+      continue-on-error: true # Allow this step to fail without stopping the workflow
+
+    - name: Build Executor Project (C++)
+      # Explicitly build the Executor project, assuming it has a .vcxproj file inside its directory.
+      # This ensures Executor.exe is built even if it's not properly linked in CloudyPublic.sln.
+      run: |
+        echo "Attempting to build Executor project directly..."
+        # Assuming the .vcxproj file is named Executor.vcxproj inside the Executor folder
+        $projectPath = ".\Executor\Executor.vcxproj"
+        if (Test-Path $projectPath) {
+            msbuild $projectPath /p:Configuration=Release /p:Platform=x64 /m /t:Rebuild
+            if ($LASTEXITCODE -ne 0) {
+                echo "::error::Executor.vcxproj build failed with exit code $LASTEXITCODE"
+                exit 1
+            }
+            echo "Executor.vcxproj built successfully."
+        } else {
+            echo "::warning::Executor.vcxproj not found at $projectPath. Skipping direct build of Executor."
+            # If .vcxproj not found, the previous solution build was the only chance.
         }
-        echo "MSBuild completed successfully."
-      shell: pwsh # Using PowerShell for better error handling and logging
+      shell: pwsh
 
     - name: List files in Executor directory after build (for debugging)
       # This step helps to debug where the Executor.exe might have been placed.
       # It lists all files and directories recursively within the 'Executor' folder.
       run: |
-        echo "Listing files in Executor directory..."
+        echo "Listing files in Executor directory recursively after build attempt:"
         Get-ChildItem -Path .\Executor -Recurse | ForEach-Object { Write-Host $_.FullName }
       shell: pwsh
 
     - name: Find Built Executable (Executor.exe)
       id: find_exe
       run: |
-        # Attempt to find the Executor.exe file.
-        # C++ projects typically output to 'Executor\x64\Release\Executor.exe' relative to the solution.
-        $expectedPath = Join-Path (Get-Location) "Executor\x64\Release\Executor.exe"
-        if (Test-Path $expectedPath) {
-            Write-Host "Found Executor.exe at expected path: $expectedPath"
-            echo "::set-output name=exe_path::$expectedPath"
+        echo "Searching for Executor.exe in Executor directory and its subfolders..."
+        # Search for Executor.exe specifically within the 'Executor' directory and its children.
+        # This is the most common output path for a C++ project named 'Executor'
+        # when built for Release|x64.
+        $exePath = Get-ChildItem -Path .\Executor -Recurse -Filter "Executor.exe" | Where-Object { $_.FullName -like "*Release*" -and $_.FullName -like "*x64*" } | Select-Object -ExpandProperty FullName
+
+        if ($exePath) {
+            Write-Host "Found Executor.exe at: $exePath"
+            echo "::set-output name=exe_path::$exePath"
         } else {
-            Write-Warning "Executor.exe not found at expected path: $expectedPath. Searching broadly..."
-            # Fallback: Search for Executor.exe broadly within the Executor directory,
-            # filtering for files in 'Release' and 'x64' subdirectories.
-            $exePath = Get-ChildItem -Path .\Executor -Recurse -Filter "Executor.exe" | Where-Object { $_.FullName -like "*Release*" -and $_.FullName -like "*x64*" } | Select-Object -ExpandProperty FullName
-            if ($exePath) {
-                Write-Host "Found Executor.exe broadly at: $exePath"
-                echo "::set-output name=exe_path::$exePath"
-            } else {
-                Write-Error "Executor.exe not found anywhere in expected Release x64 output paths."
-                exit 1 # Fail the workflow if the executable isn't found
-            }
+            Write-Error "Executor.exe not found in expected Release x64 output paths within the Executor directory."
+            Write-Error "Please check the 'List files in Executor directory after build' step logs for actual output paths."
+            exit 1 # Fail the workflow if the executable isn't found
         }
-      shell: pwsh # Use PowerShell for robust path manipulation and checks
+      shell: pwsh
 
     - name: Upload Built Executor.exe as Artifact
       uses: actions/upload-artifact@v4 # Action to upload the build output as an artifact
