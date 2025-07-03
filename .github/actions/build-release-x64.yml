@@ -1,0 +1,59 @@
+name: Build the thing
+
+on:
+  push:
+    branches:
+      - main
+      - release/* # Trigger on pushes to main or any release branch
+  workflow_dispatch: # Allows manual triggering from the GitHub UI
+
+jobs:
+  build:
+    runs-on: windows-latest # Use a Windows runner for building Windows executables
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4 # Action to checkout your repository code
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2 # Action to set up MSBuild environment
+      with:
+        msbuild-architecture: x64 # Ensure x64 MSBuild is used
+        vs-version: '2022' # Specify Visual Studio 2022, commonly used for C++ projects
+
+    - name: Build Solution
+      run: |
+        # Build the Visual Studio solution for Release | x64.
+        # /p:Configuration=Release: Sets the build configuration to Release.
+        # /p:Platform=x64: Sets the target platform to x64.
+        # /m: Uses multiple CPU cores for faster compilation.
+        # /t:Rebuild: Cleans and then builds the solution.
+        # The solution file 'CloudyPublic.sln' is expected at the root of the repository.
+        msbuild CloudyPublic.sln /p:Configuration=Release /p:Platform=x64 /m /t:Rebuild
+
+    - name: Find Built Executable
+      id: find_exe
+      run: |
+        # Locate the built executable. C++ projects typically output to
+        # 'x64/Release' or 'Release/x64' relative to the project directory.
+        # We'll search for the .exe within the CloudyPublic project's output.
+        $exePath = Get-ChildItem -Path ./CloudyPublic -Recurse -Filter "*.exe" | Where-Object { $_.FullName -like "*Release*" -and $_.FullName -like "*x64*" } | Select-Object -ExpandProperty FullName
+        if ($exePath) {
+            Write-Host "Found executable at: $exePath"
+            # Set the path as an output variable for the next step
+            echo "::set-output name=exe_path::$exePath"
+        } else {
+            Write-Error "Executable not found in expected Release x64 output path."
+            exit 1
+        }
+      shell: pwsh # Use PowerShell for more robust path finding
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4 # Action to upload the build output as an artifact
+      with:
+        name: InternalStarter-x64-Release # Name of the artifact
+        # The path needs to be the directory containing the found executable.
+        # We use the parent directory of the found executable.
+        path: ${{ steps.find_exe.outputs.exe_path | Split-Path -Parent }}
+        retention-days: 7 # How long to retain the artifact (optional)
+
