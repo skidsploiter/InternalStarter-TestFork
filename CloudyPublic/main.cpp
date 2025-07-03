@@ -7,7 +7,6 @@
 #include "Roblox/Execution/Execution.hpp"
 #include "Communication/NamedPipe/NamedPipe.hpp"
 
-
 using namespace Globals;
 
 ExecutionMode GlobalMode = LUAU_LOAD; // <-- set mode here LUAU_LOAD or LUAVM_LOAD supported.
