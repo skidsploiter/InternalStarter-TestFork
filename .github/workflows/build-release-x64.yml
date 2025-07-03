@@ -18,12 +18,11 @@ jobs:
     - name: Setup MSBuild and Visual Studio Environment
       # This action ensures that MSBuild and necessary Visual Studio components (like C++ workloads)
       # are correctly configured and added to the PATH.
-      # 'vs-version: "2022"' targets Visual Studio 2022.
+      # Removed 'vs-version: "2022"' to allow the action to auto-detect the latest compatible VS.
       # 'msbuild-architecture: x64' ensures the 64-bit MSBuild is used.
       uses: microsoft/setup-msbuild@v2
       with:
         msbuild-architecture: x64
-        vs-version: '2022'
 
     - name: Build Solution (CloudyPublic.sln)
       run: |
